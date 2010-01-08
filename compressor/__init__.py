@@ -149,8 +149,7 @@ class CssCompressor(Compressor):
     def __init__(self, content, ouput_prefix="css"):
         self.extension = ".css"
         self.template_name = "compressor/css.html"
-        self.filters = ['compressor.filters.css_default.CssAbsoluteFilter', 'compressor.filters.css_default.CssMediaFilter']
-        self.filters.extend(settings.COMPRESS_CSS_FILTERS)
+        self.filters = list(settings.COMPRESS_CSS_FILTERS)
         self.type = 'css'
         super(CssCompressor, self).__init__(content, ouput_prefix)
 
