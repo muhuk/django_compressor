@@ -1,9 +1,11 @@
 import os
+from collections import defaultdict
 from BeautifulSoup import BeautifulSoup
 
 from django import template
 from django.conf import settings as django_settings
 from django.template.loader import render_to_string
+from django.utils.functional import curry
 
 from compressor.conf import settings
 from compressor import filters
@@ -144,7 +146,7 @@ class CssCompressor(Compressor):
     def __init__(self, content, output_prefix="css"):
         self.extension = ".css"
         self.template_name = "compressor/css.html"
-        self.filters = ['compressor.filters.css_default.CssAbsoluteFilter', 'compressor.filters.css_default.CssMediaFilter']
+        self.filters = ['compressor.filters.css_default.CssAbsoluteFilter']
         self.filters.extend(settings.COMPRESS_CSS_FILTERS)
         self.type = 'css'
         super(CssCompressor, self).__init__(content, output_prefix)
@@ -153,16 +155,33 @@ class CssCompressor(Compressor):
         if self.split_content:
             return self.split_content
         split = self.soup.findAll({'link' : True, 'style' : True})
+        self.by_media = defaultdict(curry(CssCompressor, content=''))
         for elem in split:
+            data = None
             if elem.name == 'link' and elem['rel'] == 'stylesheet':
                 try:
-                    self.split_content.append(('file', self.get_filename(elem['href']), elem))
+                    data = ('file', self.get_filename(elem['href']), elem)
                 except UncompressableFileError:
                     if django_settings.DEBUG:
                         raise
             if elem.name == 'style':
-                self.split_content.append(('hunk', elem.string, elem))
+                data = ('hunk', elem.string, elem)
+            if data:
+                self.split_content.append(data)
+                self.by_media[elem.get('media', None)].split_content.append(data)
         return self.split_content
+
+    def output(self):
+        self.split_contents()
+        if not hasattr(self, 'by_media'):
+            return super(CssCompressor, self).output()
+        if not settings.COMPRESS:
+            return self.content
+        ret = []
+        for media, subnode in self.by_media.items():
+            subnode.extra_context = {'media': media}
+            ret.append(subnode.output())
+        return ''.join(ret)
 
 
 class JsCompressor(Compressor):
