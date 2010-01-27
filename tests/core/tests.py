@@ -148,7 +148,6 @@ class CssMediaTestCase(TestCase):
     def test_css_output(self):
         links = BeautifulSoup(self.cssNode.output()).findAll('link')
         media = set([u'screen', u'print', u'all', None])
-        print self.cssNode.output()
         self.assertEqual(len(links), 4)
         self.assertEqual(media, set([l.get('media', None) for l in links]))
 
