@@ -27,16 +27,12 @@ def get_hexdigest(plaintext):
 
 class Compressor(object):
 
-    def __init__(self, content, ouput_prefix="compressed"):
+    def __init__(self, content, output_prefix="compressed"):
         self.content = content
         self.type = None
-        self.ouput_prefix = ouput_prefix
+        self.output_prefix = output_prefix
         self.split_content = []
         self.soup = BeautifulSoup(self.content)
-
-    def content_hash(self):
-        """docstring for content_hash"""
-        pass
 
     def split_contents(self):
         raise NotImplementedError('split_contents must be defined in a subclass')
@@ -106,7 +102,6 @@ class Compressor(object):
         if getattr(self, '_output', ''):
             return self._output
         output = self.concat()
-        filter_method = getattr(self, 'filter_method', None)
         if self.filters:
             output = self.filter(output, 'output')
         self._output = output
@@ -119,7 +114,7 @@ class Compressor(object):
     @property
     def new_filepath(self):
         filename = "".join([self.hash, self.extension])
-        filepath = "%s/%s/%s" % (settings.OUTPUT_DIR.strip('/'), self.ouput_prefix, filename)
+        filepath = "%s/%s/%s" % (settings.OUTPUT_DIR.strip('/'), self.output_prefix, filename)
         return filepath
 
     def save_file(self):
@@ -146,12 +141,12 @@ class Compressor(object):
 
 class CssCompressor(Compressor):
 
-    def __init__(self, content, ouput_prefix="css"):
+    def __init__(self, content, output_prefix="css"):
         self.extension = ".css"
         self.template_name = "compressor/css.html"
         self.filters = list(settings.COMPRESS_CSS_FILTERS)
         self.type = 'css'
-        super(CssCompressor, self).__init__(content, ouput_prefix)
+        super(CssCompressor, self).__init__(content, output_prefix)
 
     def split_contents(self):
         if self.split_content:
@@ -159,7 +154,6 @@ class CssCompressor(Compressor):
         split = self.soup.findAll({'link' : True, 'style' : True})
         for elem in split:
             if elem.name == 'link' and elem['rel'] == 'stylesheet':
-                # TODO: Make sure this doesn't break when debug is off. I was thinking it would just skip over but it 500's :(
                 try:
                     self.split_content.append(('file', self.get_filename(elem['href']), elem))
                 except UncompressableFileError:
@@ -172,12 +166,12 @@ class CssCompressor(Compressor):
 
 class JsCompressor(Compressor):
 
-    def __init__(self, content, ouput_prefix="js"):
+    def __init__(self, content, output_prefix="js"):
         self.extension = ".js"
         self.template_name = "compressor/js.html"
         self.filters = settings.COMPRESS_JS_FILTERS
         self.type = 'js'
-        super(JsCompressor, self).__init__(content, ouput_prefix)
+        super(JsCompressor, self).__init__(content, output_prefix)
 
     def split_contents(self):
         if self.split_content:
