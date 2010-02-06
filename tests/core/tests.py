@@ -61,7 +61,7 @@ class CompressorTestCase(TestCase):
         self.assertEqual('f7c661b7a124', self.cssNode.hash)
 
     def test_css_return_if_on(self):
-        output = u'<link rel="stylesheet" href="/media/CACHE/css/f7c661b7a124.css" type="text/css" charset="utf-8">'
+        output = u'<link rel="stylesheet" href="/media/CACHE/css/f7c661b7a124.css" type="text/css" charset="utf-8" />'
         self.assertEqual(output, self.cssNode.output().strip())
 
 
@@ -154,7 +154,7 @@ class CssMediaTestCase(TestCase):
 class TemplatetagTestCase(TestCase):
     def setUp(self):
         settings.COMPRESS = True
-    
+
     def render(self, template_string, context_dict=None):
         """A shortcut for testing template output."""
         if context_dict is None:
@@ -172,7 +172,7 @@ class TemplatetagTestCase(TestCase):
         {% endcompress %}
         """
         context = { 'MEDIA_URL': settings.MEDIA_URL }
-        out = u'<link rel="stylesheet" href="/media/CACHE/css/f7c661b7a124.css" type="text/css" charset="utf-8">'
+        out = u'<link rel="stylesheet" href="/media/CACHE/css/f7c661b7a124.css" type="text/css" charset="utf-8" />'
         self.assertEqual(out, self.render(template, context))
 
     def test_nonascii_css_tag(self):
@@ -182,7 +182,7 @@ class TemplatetagTestCase(TestCase):
         {% endcompress %}
         """
         context = { 'MEDIA_URL': settings.MEDIA_URL }
-        out = '<link rel="stylesheet" href="/media/CACHE/css/1c1c0855907b.css" type="text/css" charset="utf-8">'
+        out = '<link rel="stylesheet" href="/media/CACHE/css/1c1c0855907b.css" type="text/css" charset="utf-8" />'
         self.assertEqual(out, self.render(template, context))
 
     def test_js_tag(self):
