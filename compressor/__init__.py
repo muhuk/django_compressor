@@ -59,7 +59,7 @@ class Compressor(object):
     def cachekey(self):
         cachebits = [self.content]
         cachebits.extend([str(m) for m in self.mtimes])
-        cachestr = "".join(cachebits)
+        cachestr = "".join(cachebits).encode(django_settings.DEFAULT_CHARSET)
         return "django_compressor.%s" % get_hexdigest(cachestr)[:12]
 
     @property
@@ -72,21 +72,24 @@ class Compressor(object):
                 input = v
                 if self.filters:
                     input = self.filter(input, 'input', elem=elem)
-                self._hunks.append(input)
+                # Let's cast BeautifulSoup element to unicode here since
+                # it will try to encode using ascii internally later
+                self._hunks.append(unicode(input))
             if kind == 'file':
                 # TODO: wrap this in a try/except for IoErrors(?)
                 fd = open(v, 'rb')
                 input = fd.read()
                 if self.filters:
                     input = self.filter(input, 'input', filename=v, elem=elem)
-                self._hunks.append(input)
+                self._hunks.append(unicode(input, elem.get('charset', django_settings.DEFAULT_CHARSET)))
                 fd.close()
         return self._hunks
 
     def concat(self):
-        # if any of the hunks are unicode, all of them will be coerced
-        # this breaks any hunks with non-ASCII data in them
-        return "\n".join([str(hunk) for hunk in self.hunks])
+        # Design decision needed: either everything should be unicode up to
+        # here or we encode strings as soon as we acquire them. Currently
+        # concat() expects all hunks to be unicode and does the encoding
+        return "\n".join([hunk.encode(django_settings.DEFAULT_CHARSET) for hunk in self.hunks])
 
     def filter(self, content, method, **kwargs):
         content = content
@@ -164,7 +167,7 @@ class CssCompressor(Compressor):
                 except UncompressableFileError:
                     if django_settings.DEBUG:
                         raise
-            if elem.name == 'style':
+            elif elem.name == 'style':
                 data = ('hunk', elem.string, elem)
             if data:
                 self.split_content.append(data)
