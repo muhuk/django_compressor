@@ -1,9 +1,20 @@
-import os, re, base64
+import os, re
+from base64 import b64encode
+from mimetypes import guess_type
 from compressor.filters import FilterBase, FilterError
 from compressor.conf import settings
 
 
 class DataUriFilter(FilterBase):
+    """Filter for embedding media as data: URIs.
+
+    Settings:
+         COMPRESS_DATA_URI_MIN_SIZE: Only files that are smaller than this
+                                     value will be embedded. Unit; bytes.
+
+
+    Don't use this class directly. Use a subclass.
+    """
     def input(self, filename=None, **kwargs):
         if not filename or not filename.startswith(settings.MEDIA_ROOT):
             return self.content
@@ -20,12 +31,16 @@ class DataUriFilter(FilterBase):
         if not url.startswith('data:'):
             path = self.get_file_path(url)
             if os.stat(path).st_size <= settings.COMPRESS_DATA_URI_MIN_SIZE:
-                data = base64.b64encode(open(path, 'rb').read())
-                return 'url("data:image/png;base64,%s")' % data
+                data = b64encode(open(path, 'rb').read())
+                return 'url("data:%s;base64,%s")' % (guess_type(path)[0], data)
         return 'url("%s")' % url
 
 
-class DataUriCssFilter(DataUriFilter):
+class CssDataUriFilter(DataUriFilter):
+    """Filter for embedding media as data: URIs in CSS files.
+
+    See DataUriFilter.
+    """
     url_patterns = (
         re.compile(r'url\(([^\)]+)\)'),
     )
