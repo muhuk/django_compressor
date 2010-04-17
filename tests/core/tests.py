@@ -1,9 +1,12 @@
 import os, re
+import gzip
 
 from django.template import Template, Context
 from django.test import TestCase
 from compressor import CssCompressor, JsCompressor
 from compressor.conf import settings
+from compressor.storage import CompressorFileStorage
+
 from django.conf import settings as django_settings
 
 from BeautifulSoup import BeautifulSoup
@@ -63,7 +66,6 @@ class CompressorTestCase(TestCase):
     def test_css_return_if_on(self):
         output = u'<link rel="stylesheet" href="/media/CACHE/css/f7c661b7a124.css" type="text/css" charset="utf-8" />'
         self.assertEqual(output, self.cssNode.output().strip())
-
 
     def test_js_split(self):
         out = [('file', os.path.join(settings.MEDIA_ROOT, u'js/one.js'), '<script src="/media/js/one.js" type="text/javascript" charset="utf-8"></script>'),
@@ -151,18 +153,24 @@ class CssMediaTestCase(TestCase):
         self.assertEqual(len(links), 4)
         self.assertEqual(media, set([l.get('media', None) for l in links]))
 
+def render(template_string, context_dict=None):
+    """A shortcut for testing template output."""
+    if context_dict is None:
+        context_dict = {}
+
+    c = Context(context_dict)
+    t = Template(template_string)
+    return t.render(c).strip()
+
 class TemplatetagTestCase(TestCase):
     def setUp(self):
         settings.COMPRESS = True
 
-    def render(self, template_string, context_dict=None):
-        """A shortcut for testing template output."""
-        if context_dict is None:
-            context_dict = {}
-
-        c = Context(context_dict)
-        t = Template(template_string)
-        return t.render(c).strip()
+    def test_empty_tag(self):
+        template = u"""{% load compress %}{% compress js %}{% block js %}
+        {% endblock %}{% endcompress %}"""
+        context = { 'MEDIA_URL': settings.MEDIA_URL }
+        self.assertEqual(u'', render(template, context))
 
     def test_css_tag(self):
         template = u"""{% load compress %}{% compress css %}
@@ -173,7 +181,7 @@ class TemplatetagTestCase(TestCase):
         """
         context = { 'MEDIA_URL': settings.MEDIA_URL }
         out = u'<link rel="stylesheet" href="/media/CACHE/css/f7c661b7a124.css" type="text/css" charset="utf-8" />'
-        self.assertEqual(out, self.render(template, context))
+        self.assertEqual(out, render(template, context))
 
     def test_nonascii_css_tag(self):
         template = u"""{% load compress %}{% compress css %}
@@ -183,7 +191,7 @@ class TemplatetagTestCase(TestCase):
         """
         context = { 'MEDIA_URL': settings.MEDIA_URL }
         out = '<link rel="stylesheet" href="/media/CACHE/css/1c1c0855907b.css" type="text/css" charset="utf-8" />'
-        self.assertEqual(out, self.render(template, context))
+        self.assertEqual(out, render(template, context))
 
     def test_js_tag(self):
         template = u"""{% load compress %}{% compress js %}
@@ -193,7 +201,7 @@ class TemplatetagTestCase(TestCase):
         """
         context = { 'MEDIA_URL': settings.MEDIA_URL }
         out = u'<script type="text/javascript" src="/media/CACHE/js/3f33b9146e12.js" charset="utf-8"></script>'
-        self.assertEqual(out, self.render(template, context))
+        self.assertEqual(out, render(template, context))
 
     def test_nonascii_js_tag(self):
         template = u"""{% load compress %}{% compress js %}
@@ -203,5 +211,47 @@ class TemplatetagTestCase(TestCase):
         """
         context = { 'MEDIA_URL': settings.MEDIA_URL }
         out = u'<script type="text/javascript" src="/media/CACHE/js/5d5c0e1cb25f.js" charset="utf-8"></script>'
-        self.assertEqual(out, self.render(template, context))
+        self.assertEqual(out, render(template, context))
 
+    def test_nonascii_latin1_js_tag(self):
+        template = u"""{% load compress %}{% compress js %}
+        <script src="{{ MEDIA_URL }}js/nonasc_latin1.js" type="text/javascript" charset="utf-8"></script>
+        <script type="text/javascript" charset="utf-8">var test_value = "\u2014";</script>
+        {% endcompress %}
+        """
+        context = { 'MEDIA_URL': settings.MEDIA_URL }
+        out = u'<script type="text/javascript" src="/media/CACHE/js/40a8e9ffb476.js" charset="utf-8"></script>'
+        self.assertEqual(out, render(template, context))
+
+class TestStorage(CompressorFileStorage):
+    """
+    Test compressor storage that gzips storage files
+    """
+    def url(self, name):
+        return u'%s.gz' % super(TestStorage, self).url(name)
+
+    def save(self, filename, content):
+        filename = super(TestStorage, self).save(filename, content)
+        out = gzip.open(u'%s.gz' % self.path(filename), 'wb')
+        out.writelines(open(self.path(filename), 'rb'))
+        out.close()
+
+class StorageTestCase(TestCase):
+    def setUp(self):
+        self._storage = settings.STORAGE
+        settings.STORAGE = 'core.tests.TestStorage'
+        settings.COMPRESS = True
+
+    def tearDown(self):
+        settings.STORAGE = self._storage
+
+    def test_css_tag_with_storage(self):
+        template = u"""{% load compress %}{% compress css %}
+        <link rel="stylesheet" href="{{ MEDIA_URL }}css/one.css" type="text/css" charset="utf-8">
+        <style type="text/css">p { border:5px solid white;}</style>
+        <link rel="stylesheet" href="{{ MEDIA_URL }}css/two.css" type="text/css" charset="utf-8">
+        {% endcompress %}
+        """
+        context = { 'MEDIA_URL': settings.MEDIA_URL }
+        out = u'<link rel="stylesheet" href="/media/CACHE/css/5b231a62e9a6.css.gz" type="text/css" charset="utf-8" />'
+        self.assertEqual(out, render(template, context))

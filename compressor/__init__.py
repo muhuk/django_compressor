@@ -7,6 +7,9 @@ from django.conf import settings as django_settings
 from django.template.loader import render_to_string
 from django.utils.functional import curry
 
+from django.core.files.base import ContentFile
+from django.core.files.storage import get_storage_class
+
 from compressor.conf import settings
 from compressor import filters
 
@@ -40,16 +43,12 @@ class Compressor(object):
         raise NotImplementedError('split_contents must be defined in a subclass')
 
     def get_filename(self, url):
-        if not url.startswith(settings.MEDIA_URL):
-            raise UncompressableFileError('"%s" is not in COMPRESS_URL ("%s") and can not be compressed' % (url, settings.MEDIA_URL))
-        # .lstrip used to remove leading slashes because os.path.join
-        # counterintuitively takes "/foo/bar" and "/baaz" to produce "/baaz",
-        # not the "/foo/bar/baaz" which you might expect:
-        basename = url.replace(settings.MEDIA_URL, "", 1).lstrip("/")
-        filename = os.path.join(settings.MEDIA_ROOT, basename)
-        if not os.path.exists(filename):
-            raise UncompressableFileError('"%s" does not exist' % (filename,))
-        return filename
+        if not url.startswith(self.storage.base_url):
+            raise UncompressableFileError('"%s" is not in COMPRESS_URL ("%s") and can not be compressed' % (url, self.storage.base_url))
+        basename = url.replace(self.storage.base_url, "", 1)
+        if not self.storage.exists(basename):
+            raise UncompressableFileError('"%s" does not exist' % self.storage.path(basename))
+        return self.storage.path(basename)
 
     @property
     def mtimes(self):
@@ -61,6 +60,10 @@ class Compressor(object):
         cachebits.extend([str(m) for m in self.mtimes])
         cachestr = "".join(cachebits).encode(django_settings.DEFAULT_CHARSET)
         return "django_compressor.%s" % get_hexdigest(cachestr)[:12]
+
+    @property
+    def storage(self):
+        return get_storage_class(settings.STORAGE)()
 
     @property
     def hunks(self):
@@ -81,7 +84,8 @@ class Compressor(object):
                 input = fd.read()
                 if self.filters:
                     input = self.filter(input, 'input', filename=v, elem=elem)
-                self._hunks.append(unicode(input, elem.get('charset', django_settings.DEFAULT_CHARSET)))
+                charset = elem.get('charset', django_settings.DEFAULT_CHARSET)
+                self._hunks.append(unicode(input, charset))
                 fd.close()
         return self._hunks
 
@@ -92,7 +96,6 @@ class Compressor(object):
         return "\n".join([hunk.encode(django_settings.DEFAULT_CHARSET) for hunk in self.hunks])
 
     def filter(self, content, method, **kwargs):
-        content = content
         for f in self.filters:
             filter = getattr(filters.get_class(f)(content, filter_type=self.type), method)
             try:
@@ -119,28 +122,20 @@ class Compressor(object):
     @property
     def new_filepath(self):
         filename = "".join([self.hash, self.extension])
-        filepath = "%s/%s/%s" % (settings.OUTPUT_DIR.strip('/'), self.output_prefix, filename)
-        return filepath
+        return "/".join((settings.OUTPUT_DIR.strip('/'), self.output_prefix, filename))
 
     def save_file(self):
-        filename = "%s/%s" % (settings.MEDIA_ROOT.rstrip('/'), self.new_filepath)
-        if os.path.exists(filename):
+        if self.storage.exists(self.new_filepath):
             return False
-        dirname = os.path.dirname(filename)
-        if not os.path.exists(dirname):
-            os.makedirs(dirname)
-        fd = open(filename, 'wb+')
-        fd.write(self.combined)
-        fd.close()
+        self.storage.save(self.new_filepath, ContentFile(self.combined))
         return True
 
     def output(self):
         if not settings.COMPRESS:
             return self.content
-        url = "%s/%s" % (settings.MEDIA_URL.rstrip('/'), self.new_filepath)
         self.save_file()
         context = getattr(self, 'extra_context', {})
-        context['url'] = url
+        context['url'] = self.storage.url(self.new_filepath)
         return render_to_string(self.template_name, context)
 
 
@@ -158,7 +153,7 @@ class CssCompressor(Compressor):
         if self.split_content:
             return self.split_content
         split = self.soup.findAll({'link' : True, 'style' : True})
-        self.by_media = defaultdict(curry(CssCompressor, content=''))
+        self.by_media = {}
         for elem in split:
             data = None
             if elem.name == 'link' and elem['rel'] == 'stylesheet':
@@ -171,7 +166,8 @@ class CssCompressor(Compressor):
                 data = ('hunk', elem.string, elem)
             if data:
                 self.split_content.append(data)
-                self.by_media[elem.get('media', None)].split_content.append(data)
+                self.by_media.setdefault(elem.get('media', None),
+                    CssCompressor(content='')).split_content.append(data)
         return self.split_content
 
     def output(self):
