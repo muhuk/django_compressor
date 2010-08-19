@@ -1,15 +1,17 @@
-import os, re
+import os
+import re
 import gzip
+from BeautifulSoup import BeautifulSoup
 
 from django.template import Template, Context, TemplateSyntaxError
 from django.test import TestCase
-from compressor import CssCompressor, JsCompressor
-from compressor.conf import settings
-from compressor.storage import CompressorFileStorage
-
+from django.core.files.storage import get_storage_class
 from django.conf import settings as django_settings
 
-from BeautifulSoup import BeautifulSoup
+from compressor import CssCompressor, JsCompressor, storage
+from compressor.conf import settings
+from compressor.storage import CompressorFileStorage
+from compressor.utils import get_hexdigest, get_mtime
 
 
 class CompressorTestCase(TestCase):
@@ -31,12 +33,12 @@ class CompressorTestCase(TestCase):
 
     def test_css_split(self):
         out = [
-            ('file', os.path.join(settings.MEDIA_ROOT, u'css/one.css'), '<link rel="stylesheet" href="/media/css/one.css" type="text/css" charset="utf-8" />'),
-            ('hunk', u'p { border:5px solid green;}', '<style type="text/css">p { border:5px solid green;}</style>'),
-            ('file', os.path.join(settings.MEDIA_ROOT, u'css/two.css'), '<link rel="stylesheet" href="/media/css/two.css" type="text/css" charset="utf-8" />'),
+            ('file', os.path.join(settings.MEDIA_ROOT, u'css/one.css'), u'<link rel="stylesheet" href="/media/css/one.css" type="text/css" charset="utf-8" />'),
+            ('hunk', u'p { border:5px solid green;}', u'<style type="text/css">p { border:5px solid green;}</style>'),
+            ('file', os.path.join(settings.MEDIA_ROOT, u'css/two.css'), u'<link rel="stylesheet" href="/media/css/two.css" type="text/css" charset="utf-8" />'),
         ]
         split = self.cssNode.split_contents()
-        split = [(x[0], x[1], str(x[2])) for x in split]
+        split = [(x[0], x[1], self.cssNode.parser.elem_str(x[2])) for x in split]
         self.assertEqual(out, split)
 
     def test_css_hunks(self):
@@ -72,7 +74,7 @@ class CompressorTestCase(TestCase):
          ('hunk', u'obj.value = "value";', '<script type="text/javascript" charset="utf-8">obj.value = "value";</script>')
          ]
         split = self.jsNode.split_contents()
-        split = [(x[0], x[1], str(x[2])) for x in split]
+        split = [(x[0], x[1], self.jsNode.parser.elem_str(x[2])) for x in split]
         self.assertEqual(out, split)
 
     def test_js_hunks(self):
@@ -95,6 +97,43 @@ class CompressorTestCase(TestCase):
         output = u'<script type="text/javascript" src="/media/CACHE/js/3f33b9146e12.js" charset="utf-8"></script>'
         self.assertEqual(output, self.jsNode.output())
 
+    def test_custom_output_dir(self):
+        old_output_dir = settings.OUTPUT_DIR
+        settings.OUTPUT_DIR = 'custom'
+        output = u'<script type="text/javascript" src="/media/custom/js/3f33b9146e12.js" charset="utf-8"></script>'
+        self.assertEqual(output, JsCompressor(self.js).output())
+        settings.OUTPUT_DIR = ''
+        output = u'<script type="text/javascript" src="/media/js/3f33b9146e12.js" charset="utf-8"></script>'
+        self.assertEqual(output, JsCompressor(self.js).output())
+        settings.OUTPUT_DIR = '/custom/nested/'
+        output = u'<script type="text/javascript" src="/media/custom/nested/js/3f33b9146e12.js" charset="utf-8"></script>'
+        self.assertEqual(output, JsCompressor(self.js).output())
+        settings.OUTPUT_DIR = old_output_dir
+
+class LxmlCompressorTestCase(CompressorTestCase):
+
+    def test_css_split(self):
+        out = [
+            ('file', os.path.join(settings.MEDIA_ROOT, u'css/one.css'), u'<link rel="stylesheet" href="/media/css/one.css" type="text/css" charset="utf-8">'),
+            ('hunk', u'p { border:5px solid green;}', u'<style type="text/css">p { border:5px solid green;}</style>'),
+            ('file', os.path.join(settings.MEDIA_ROOT, u'css/two.css'), u'<link rel="stylesheet" href="/media/css/two.css" type="text/css" charset="utf-8">'),
+        ]
+        split = self.cssNode.split_contents()
+        split = [(x[0], x[1], self.cssNode.parser.elem_str(x[2])) for x in split]
+        self.assertEqual(out, split)
+
+    def setUp(self):
+        self.old_parser = settings.PARSER
+        settings.PARSER = 'compressor.parser.LxmlParser'
+        super(LxmlCompressorTestCase, self).setUp()
+
+    def tearDown(self):
+        settings.PARSER = self.old_parser
+
+def get_hashed_mtime(filename, length=12):
+    filename = os.path.realpath(filename)
+    mtime = str(int(get_mtime(filename)))
+    return get_hexdigest(mtime)[:length]
 
 class CssAbsolutizingTestCase(TestCase):
     def setUp(self):
@@ -110,30 +149,64 @@ class CssAbsolutizingTestCase(TestCase):
         from compressor.filters.css_default import CssAbsoluteFilter
         filename = os.path.join(settings.MEDIA_ROOT, 'css/url/test.css')
         content = "p { background: url('../../images/image.gif') }"
-        output = "p { background: url('%simages/image.gif') }" % settings.MEDIA_URL
+        output = "p { background: url('%simages/image.gif?%s') }" % (settings.MEDIA_URL, get_hashed_mtime(filename))
         filter = CssAbsoluteFilter(content)
         self.assertEqual(output, filter.input(filename=filename))
         settings.MEDIA_URL = 'http://media.example.com/'
         filename = os.path.join(settings.MEDIA_ROOT, 'css/url/test.css')
-        output = "p { background: url('%simages/image.gif') }" % settings.MEDIA_URL
+        output = "p { background: url('%simages/image.gif?%s') }" % (settings.MEDIA_URL, get_hashed_mtime(filename))
         self.assertEqual(output, filter.input(filename=filename))
 
     def test_css_absolute_filter_https(self):
         from compressor.filters.css_default import CssAbsoluteFilter
         filename = os.path.join(settings.MEDIA_ROOT, 'css/url/test.css')
         content = "p { background: url('../../images/image.gif') }"
-        output = "p { background: url('%simages/image.gif') }" % settings.MEDIA_URL
+        output = "p { background: url('%simages/image.gif?%s') }" % (settings.MEDIA_URL, get_hashed_mtime(filename))
         filter = CssAbsoluteFilter(content)
         self.assertEqual(output, filter.input(filename=filename))
         settings.MEDIA_URL = 'https://media.example.com/'
         filename = os.path.join(settings.MEDIA_ROOT, 'css/url/test.css')
-        output = "p { background: url('%simages/image.gif') }" % settings.MEDIA_URL
+        output = "p { background: url('%simages/image.gif?%s') }" % (settings.MEDIA_URL, get_hashed_mtime(filename))
         self.assertEqual(output, filter.input(filename=filename))
 
+    def test_css_absolute_filter_relative_path(self):
+        from compressor.filters.css_default import CssAbsoluteFilter
+        filename = os.path.join(django_settings.TEST_DIR, 'whatever', '..', 'media', 'whatever/../css/url/test.css')
+        content = "p { background: url('../../images/image.gif') }"
+        output = "p { background: url('%simages/image.gif?%s') }" % (settings.MEDIA_URL, get_hashed_mtime(filename))
+        filter = CssAbsoluteFilter(content)
+        self.assertEqual(output, filter.input(filename=filename))
+        settings.MEDIA_URL = 'https://media.example.com/'
+        output = "p { background: url('%simages/image.gif?%s') }" % (settings.MEDIA_URL, get_hashed_mtime(filename))
+        self.assertEqual(output, filter.input(filename=filename))
+
+
     def test_css_hunks(self):
-        out = [u"p { background: url('/media/images/test.png'); }\np { background: url('/media/images/test.png'); }\np { background: url('/media/images/test.png'); }\np { background: url('/media/images/test.png'); }\n",
-               u"p { background: url('/media/images/test.png'); }\np { background: url('/media/images/test.png'); }\np { background: url('/media/images/test.png'); }\np { background: url('/media/images/test.png'); }\n",
-               ]
+        hash_dict = {
+            'hash1': get_hashed_mtime(os.path.join(settings.MEDIA_ROOT, 'css/url/url1.css')),
+            'hash2': get_hashed_mtime(os.path.join(settings.MEDIA_ROOT, 'css/url/2/url2.css')),
+        }
+        out = [u"p { background: url('/media/images/test.png?%(hash1)s'); }\np { background: url('/media/images/test.png?%(hash1)s'); }\np { background: url('/media/images/test.png?%(hash1)s'); }\np { background: url('/media/images/test.png?%(hash1)s'); }\n" % hash_dict,
+               u"p { background: url('/media/images/test.png?%(hash2)s'); }\np { background: url('/media/images/test.png?%(hash2)s'); }\np { background: url('/media/images/test.png?%(hash2)s'); }\np { background: url('/media/images/test.png?%(hash2)s'); }\n" % hash_dict]
+        self.assertEqual(out, self.cssNode.hunks)
+
+
+class CssDataUriTestCase(TestCase):
+    def setUp(self):
+        settings.COMPRESS = True
+        settings.COMPRESS_CSS_FILTERS = [
+            'compressor.filters.css_default.CssAbsoluteFilter',
+            'compressor.filters.datauri.CssDataUriFilter',
+        ]
+        settings.MEDIA_URL = '/media/'
+        self.css = """
+        <link rel="stylesheet" href="/media/css/datauri.css" type="text/css" charset="utf-8">
+        """
+        self.cssNode = CssCompressor(self.css)
+
+    def test_data_uris(self):
+        datauri_hash = get_hashed_mtime(os.path.join(settings.MEDIA_ROOT, 'css/datauri.css'))
+        out = [u'.add { background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABGdBTUEAAK/INwWK6QAAABl0RVh0U29mdHdhcmUAQWRvYmUgSW1hZ2VSZWFkeXHJZTwAAAJvSURBVDjLpZPrS5NhGIf9W7YvBYOkhlkoqCklWChv2WyKik7blnNris72bi6dus0DLZ0TDxW1odtopDs4D8MDZuLU0kXq61CijSIIasOvv94VTUfLiB74fXngup7nvrnvJABJ/5PfLnTTdcwOj4RsdYmo5glBWP6iOtzwvIKSWstI0Wgx80SBblpKtE9KQs/We7EaWoT/8wbWP61gMmCH0lMDvokT4j25TiQU/ITFkek9Ow6+7WH2gwsmahCPdwyw75uw9HEO2gUZSkfyI9zBPCJOoJ2SMmg46N61YO/rNoa39Xi41oFuXysMfh36/Fp0b7bAfWAH6RGi0HglWNCbzYgJaFjRv6zGuy+b9It96N3SQvNKiV9HvSaDfFEIxXItnPs23BzJQd6DDEVM0OKsoVwBG/1VMzpXVWhbkUM2K4oJBDYuGmbKIJ0qxsAbHfRLzbjcnUbFBIpx/qH3vQv9b3U03IQ/HfFkERTzfFj8w8jSpR7GBE123uFEYAzaDRIqX/2JAtJbDat/COkd7CNBva2cMvq0MGxp0PRSCPF8BXjWG3FgNHc9XPT71Ojy3sMFdfJRCeKxEsVtKwFHwALZfCUk3tIfNR8XiJwc1LmL4dg141JPKtj3WUdNFJqLGFVPC4OkR4BxajTWsChY64wmCnMxsWPCHcutKBxMVp5mxA1S+aMComToaqTRUQknLTH62kHOVEE+VQnjahscNCy0cMBWsSI0TCQcZc5ALkEYckL5A5noWSBhfm2AecMAjbcRWV0pUTh0HE64TNf0mczcnnQyu/MilaFJCae1nw2fbz1DnVOxyGTlKeZft/Ff8x1BRssfACjTwQAAAABJRU5ErkJggg=="); }\n.python { background-image: url("/media/img/python.png?%s"); }\n.datauri { background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAABGdBTUEAALGPC/xhBQAAAAlwSFlzAAALEwAACxMBAJqcGAAAAAd0SU1FB9YGARc5KB0XV+IAAAAddEVYdENvbW1lbnQAQ3JlYXRlZCB3aXRoIFRoZSBHSU1Q72QlbgAAAF1JREFUGNO9zL0NglAAxPEfdLTs4BZM4DIO4C7OwQg2JoQ9LE1exdlYvBBeZ7jqch9//q1uH4TLzw4d6+ErXMMcXuHWxId3KOETnnXXV6MJpcq2MLaI97CER3N0 vr4MkhoXe0rZigAAAABJRU5ErkJggg=="); }\n' % datauri_hash]
         self.assertEqual(out, self.cssNode.hunks)
 
 
@@ -164,9 +237,31 @@ class CssMediaTestCase(TestCase):
 
     def test_css_output(self):
         links = BeautifulSoup(self.cssNode.output()).findAll('link')
-        media = set([u'screen', u'print', u'all', None])
+        media = [u'screen', u'print', u'all', None]
         self.assertEqual(len(links), 4)
-        self.assertEqual(media, set([l.get('media', None) for l in links]))
+        self.assertEqual(media, [l.get('media', None) for l in links])
+
+    def test_avoid_reordering_css(self):
+        css = self.css + '<style type="text/css" media="print">p { border:10px solid red;}</style>'
+        node = CssCompressor(css)
+        media = [u'screen', u'print', u'all', None, u'print']
+        links = BeautifulSoup(node.output()).findAll('link')
+        self.assertEqual(media, [l.get('media', None) for l in links])
+
+
+class CssMinTestCase(TestCase):
+    def test_cssmin_filter(self):
+        from compressor.filters.cssmin import CSSMinFilter
+        content = """p {
+
+
+        background: rgb(51,102,153) url('../../images/image.gif');
+
+
+        }
+"""
+        output =  "p{background:#369 url('../../images/image.gif')}"
+        self.assertEqual(output, CSSMinFilter(content).output())
 
 def render(template_string, context_dict=None):
     """A shortcut for testing template output."""
@@ -176,6 +271,7 @@ def render(template_string, context_dict=None):
     c = Context(context_dict)
     t = Template(template_string)
     return t.render(c).strip()
+
 
 class TemplatetagTestCase(TestCase):
     def setUp(self):
@@ -259,12 +355,12 @@ class TestStorage(CompressorFileStorage):
 
 class StorageTestCase(TestCase):
     def setUp(self):
-        self._storage = settings.STORAGE
-        settings.STORAGE = 'core.tests.TestStorage'
+        self._storage = storage.default_storage
+        storage.default_storage = get_storage_class('core.tests.TestStorage')()
         settings.COMPRESS = True
 
     def tearDown(self):
-        settings.STORAGE = self._storage
+        storage.default_storage = self._storage
 
     def test_css_tag_with_storage(self):
         template = u"""{% load compress %}{% compress css %}
@@ -276,3 +372,10 @@ class StorageTestCase(TestCase):
         context = { 'MEDIA_URL': settings.MEDIA_URL }
         out = u'<link rel="stylesheet" href="/media/CACHE/css/5b231a62e9a6.css.gz" type="text/css" charset="utf-8" />'
         self.assertEqual(out, render(template, context))
+
+
+class VerboseTestCase(CompressorTestCase):
+
+    def setUp(self):
+        super(VerboseTestCase, self).setUp()
+        setattr(settings, "COMPRESS_VERBOSE", True)

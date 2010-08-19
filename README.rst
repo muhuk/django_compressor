@@ -123,13 +123,13 @@ compressed media will be written to.
 
 :Default: ``'CACHE'``
 
-Conttrols the directory inside `COMPRESS_ROOT` that compressed files will
+Controls the directory inside `COMPRESS_ROOT` that compressed files will
 be written to.
 
 ``COMPRESS_CSS_FILTERS``
 ------------------------
 
-:Default: ``[]``
+:Default: ``['compressor.filters.css_default.CssAbsoluteFilter']``
 
 A list of filters that will be applied to CSS.
 
@@ -148,8 +148,61 @@ A list of filters that will be applied to javascript.
 The dotted path to a Django Storage backend to be used to save the
 compressed files.
 
-Dependecies
-***********
+``COMPRESS_PARSER``
+--------------------
 
-* BeautifulSoup
+:Default: ``'compressor.parser.BeautifulSoupParser'``
 
+The backend to use when parsing the JavaScript or Stylesheet files.
+The backends included in ``compressor``:
+
+  - ``compressor.parser.BeautifulSoupParser``
+  - ``compressor.parser.LxmlParser``
+
+See `Dependencies`_ for more info about the packages you need for each parser.
+
+``COMPRESS_REBUILD_TIMEOUT``
+----------------------------
+
+:Default: ``2592000`` (30 days in seconds)
+
+The period of time after which the the compressed files are rebuilt even if
+no file changes are detected.
+
+``COMPRESS_MINT_DELAY``
+------------------------
+
+:Default: ``30`` (seconds)
+
+The upper bound on how long any compression should take to run. Prevents
+dog piling, should be a lot smaller than ``COMPRESS_REBUILD_TIMEOUT``.
+
+
+``COMPRESS_MTIME_DELAY``
+------------------------
+
+:Default: ``None``
+
+The amount of time (in seconds) to cache the result of the check of the
+modification timestamp of a file. Disabled by default. Should be smaller
+than ``COMPRESS_REBUILD_TIMEOUT`` and ``COMPRESS_MINT_DELAY``.
+
+
+Dependencies
+************
+
+* BeautifulSoup_ (for the default ``compressor.parser.BeautifulSoupParser``)
+
+::
+
+    pip install BeautifulSoup
+
+* lxml_ (for the optional ``compressor.parser.LxmlParser``, requires libxml2_)
+
+::
+
+    STATIC_DEPS=true pip install lxml
+
+.. _BeautifulSoup: http://www.crummy.com/software/BeautifulSoup/
+.. _lxml: http://codespeak.net/lxml/
+.. _libxml2: http://xmlsoft.org/
