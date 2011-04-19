@@ -1,13 +1,19 @@
 import time
 
 from django import template
-from django.core.cache import cache
-from compressor import CssCompressor, JsCompressor
-from compressor.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 
+from compressor.cache import cache, get_offline_cachekey
+from compressor.conf import settings
+from compressor.utils import get_class
 
 OUTPUT_FILE = 'file'
 OUTPUT_INLINE = 'inline'
+OUTPUT_MODES = (OUTPUT_FILE, OUTPUT_INLINE)
+COMPRESSORS = {
+    "css": settings.COMPRESS_CSS_COMPRESSOR,
+    "js": settings.COMPRESS_JS_COMPRESSOR,
+}
 
 register = template.Library()
 
@@ -16,6 +22,8 @@ class CompressorNode(template.Node):
         self.nodelist = nodelist
         self.kind = kind
         self.mode = mode
+        self.compressor_cls = get_class(
+            COMPRESSORS.get(self.kind), exception=ImproperlyConfigured)
 
     def cache_get(self, key):
         packed_val = cache.get(key)
@@ -25,37 +33,77 @@ class CompressorNode(template.Node):
         if (time.time() > refresh_time) and not refreshed:
             # Store the stale value while the cache
             # revalidates for another MINT_DELAY seconds.
-            self.cache_set(key, val, timeout=settings.MINT_DELAY, refreshed=True)
+            self.cache_set(key, val, refreshed=True,
+                timeout=settings.COMPRESS_MINT_DELAY)
             return None
         return val
 
-    def cache_set(self, key, val, timeout=settings.REBUILD_TIMEOUT, refreshed=False):
+    def cache_set(self, key, val, refreshed=False,
+            timeout=settings.COMPRESS_REBUILD_TIMEOUT):
         refresh_time = timeout + time.time()
-        real_timeout = timeout + settings.MINT_DELAY
+        real_timeout = timeout + settings.COMPRESS_MINT_DELAY
         packed_val = (val, refresh_time, refreshed)
         return cache.set(key, packed_val, real_timeout)
 
-    def render(self, context):
-        content = self.nodelist.render(context)
-        if not settings.COMPRESS or not len(content.strip()):
-            return content
-        if self.kind == 'css':
-            compressor = CssCompressor(content)
-        if self.kind == 'js':
-            compressor = JsCompressor(content)
-        cachekey = "%s-%s" % (compressor.cachekey, self.mode)
-        output = self.cache_get(cachekey)
-        if output is None:
-            try:
-                if self.mode == OUTPUT_FILE:
-                    output = compressor.output()
-                else:
-                    output = compressor.output_inline()
-                self.cache_set(cachekey, output)
-            except:
-                from traceback import format_exc
-                raise Exception(format_exc())
-        return output
+    def cache_key(self, compressor):
+        return "%s.%s.%s" % (compressor.cachekey, self.mode, self.kind)
+
+    def debug_mode(self, context):
+        if settings.COMPRESS_DEBUG_TOGGLE:
+            # Only check for the debug parameter
+            # if a RequestContext was used
+            request = context.get('request', None)
+            if request is not None:
+                return settings.COMPRESS_DEBUG_TOGGLE in request.GET
+
+    def render_offline(self, forced):
+        """
+        If enabled and in offline mode, and not forced or in debug mode
+        check the offline cache and return the result if given
+        """
+        if (settings.COMPRESS_ENABLED and
+                settings.COMPRESS_OFFLINE) and not forced:
+            return cache.get(get_offline_cachekey(self.nodelist))
+
+    def render_cached(self, compressor, forced):
+        """
+        If enabled checks the cache for the given compressor's cache key
+        and return a tuple of cache key and output
+        """
+        if settings.COMPRESS_ENABLED and not forced:
+            cache_key = self.cache_key(compressor)
+            cache_content = self.cache_get(cache_key)
+            return cache_key, cache_content
+        return None, None
+
+    def render(self, context, forced=False):
+        # 1. Check if in debug mode
+        if self.debug_mode(context):
+            return self.nodelist.render(context)
+
+        # 2. Try offline cache.
+        cached_offline = self.render_offline(forced)
+        if cached_offline:
+            return cached_offline
+
+        # 3. Prepare the actual compressor and check cache
+        compressor = self.compressor_cls(self.nodelist.render(context))
+        cache_key, cache_content = self.render_cached(compressor, forced)
+        if cache_content is not None:
+            return cache_content
+
+        # 4. call compressor output method and handle exceptions
+        try:
+            rendered_output = compressor.output(self.mode, forced=forced)
+            if cache_key:
+                self.cache_set(cache_key, rendered_output)
+            return rendered_output
+        except Exception, e:
+            if settings.DEBUG or forced:
+                raise e
+
+        # 5. Or don't do anything in production
+        return self.nodelist.render(context)
 
 @register.tag
 def compress(parser, token):
@@ -102,17 +150,20 @@ def compress(parser, token):
     args = token.split_contents()
 
     if not len(args) in (2, 3):
-        raise template.TemplateSyntaxError("%r tag requires either one or two arguments." % args[0])
+        raise template.TemplateSyntaxError(
+            "%r tag requires either one or two arguments." % args[0])
 
     kind = args[1]
-    if not kind in ['css', 'js']:
-        raise template.TemplateSyntaxError("%r's argument must be 'js' or 'css'." % args[0])
+    if not kind in COMPRESSORS.keys():
+        raise template.TemplateSyntaxError(
+            "%r's argument must be 'js' or 'css'." % args[0])
 
     if len(args) == 3:
         mode = args[2]
-        if not mode in (OUTPUT_FILE, OUTPUT_INLINE):
-            raise template.TemplateSyntaxError("%r's second argument must be '%s' or '%s'." % (args[0], OUTPUT_FILE, OUTPUT_INLINE))
+        if not mode in OUTPUT_MODES:
+            raise template.TemplateSyntaxError(
+                "%r's second argument must be '%s' or '%s'." %
+                (args[0], OUTPUT_FILE, OUTPUT_INLINE))
     else:
         mode = OUTPUT_FILE
-
     return CompressorNode(nodelist, kind, mode)

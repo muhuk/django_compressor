@@ -1,208 +1,65 @@
-Django compressor
+Django Compressor
 =================
 
-Compresses linked and inline javascript or CSS into a single cached file.
-
-Syntax::
-
-    {% compress <js/css> %}
-    <html of inline or linked JS/CSS>
-    {% endcompress %}
-
-Examples::
-
-    {% compress css %}
-    <link rel="stylesheet" href="/media/css/one.css" type="text/css" charset="utf-8">
-    <style type="text/css">p { border:5px solid green;}</style>
-    <link rel="stylesheet" href="/media/css/two.css" type="text/css" charset="utf-8">
-    {% endcompress %}
-
-Which would be rendered something like::
-
-    <link rel="stylesheet" href="/media/CACHE/css/f7c661b7a124.css" type="text/css" charset="utf-8">
-
-or::
-
-    {% compress js %}
-    <script src="/media/js/one.js" type="text/javascript" charset="utf-8"></script>
-    <script type="text/javascript" charset="utf-8">obj.value = "value";</script>
-    {% endcompress %}
-
-Which would be rendered something like::
-
-    <script type="text/javascript" src="/media/CACHE/js/3f33b9146e12.js" charset="utf-8"></script>
-
-Linked files must be on your COMPRESS_URL (which defaults to MEDIA_URL).
-If DEBUG is true off-site files will throw exceptions. If DEBUG is false
-they will be silently stripped.
-
-If COMPRESS is False (defaults to the opposite of DEBUG) the compress tag
-simply returns exactly what it was given, to ease development.
-
-
-CSS Notes:
-**********
-
-All relative url() bits specified in linked CSS files are automatically
-converted to absolute URLs while being processed. Any local absolute URLs (those
-starting with a '/') are left alone.
-
-Stylesheets that are @import'd are not compressed into the main file. They are
-left alone.
-
-If the media attribute is set on <style> and <link> elements, a separate
-compressed file is created and linked for each media value you specified.
-This allows the media attribute to remain on the generated link element,
-instead of wrapping your CSS with @media blocks (which can break your own
-@media queries or @font-face declarations). It also allows browsers to avoid
-downloading CSS for irrelevant media types.
-
-**Recommendations:**
-
-* Use only relative or full domain absolute URLs in your CSS files.
-* Avoid @import! Simply list all your CSS files in the HTML, they'll be combined anyway.
-
-
-Why another static file combiner for django?
-********************************************
-
-Short version: None of them did exactly what I needed.
-
-Long version:
-
-**JS/CSS belong in the templates**
-  Every static combiner for django I've seen makes you configure
-  your static files in your settings.py. While that works, it doesn't make
-  sense. Static files are for display. And it's not even an option if your
-  settings are in completely different repositories and use different deploy
-  processes from the templates that depend on them.
-
-**Flexibility**
-  django_compressor doesn't care if different pages use different combinations
-  of statics. It doesn't care if you use inline scripts or styles. It doesn't
-  get in the way.
-
-**Automatic regeneration and cache-foreverable generated output**
-  Statics are never stale and browsers can be told to cache the output forever.
-
-**Full test suite**
-  I has one.
-
-
-Settings
-********
-
-Django compressor has a number of settings that control it's behavior.
-They've been given sensible defaults.
-
-``COMPRESS``
-------------
-
-:Default: the opposite of ``DEBUG``
-
-Boolean that decides if compression will happen.
-
-``COMPRESS_URL``
-----------------
-
-:Default: ``MEDIA_URL``
-
-Controls the URL that linked media will be read from and compressed media
-will be written to.
-
-``COMPRESS_ROOT``
------------------
-
-:Default: ``MEDIA_ROOT``
-
-Controls the absolute file path that linked media will be read from and
-compressed media will be written to.
-
-``COMPRESS_OUTPUT_DIR``
------------------------
-
-:Default: ``'CACHE'``
-
-Controls the directory inside `COMPRESS_ROOT` that compressed files will
-be written to.
-
-``COMPRESS_CSS_FILTERS``
-------------------------
-
-:Default: ``['compressor.filters.css_default.CssAbsoluteFilter']``
-
-A list of filters that will be applied to CSS.
-
-``COMPRESS_JS_FILTERS``
------------------------
-
-:Default: ``['compressor.filters.jsmin.JSMinFilter']``
-
-A list of filters that will be applied to javascript.
-
-``COMPRESS_STORAGE``
---------------------
-
-:Default: ``'compressor.storage.CompressorFileStorage'``
-
-The dotted path to a Django Storage backend to be used to save the
-compressed files.
-
-``COMPRESS_PARSER``
---------------------
-
-:Default: ``'compressor.parser.BeautifulSoupParser'``
-
-The backend to use when parsing the JavaScript or Stylesheet files.
-The backends included in ``compressor``:
-
-  - ``compressor.parser.BeautifulSoupParser``
-  - ``compressor.parser.LxmlParser``
-
-See `Dependencies`_ for more info about the packages you need for each parser.
-
-``COMPRESS_REBUILD_TIMEOUT``
-----------------------------
-
-:Default: ``2592000`` (30 days in seconds)
-
-The period of time after which the the compressed files are rebuilt even if
-no file changes are detected.
-
-``COMPRESS_MINT_DELAY``
-------------------------
-
-:Default: ``30`` (seconds)
-
-The upper bound on how long any compression should take to run. Prevents
-dog piling, should be a lot smaller than ``COMPRESS_REBUILD_TIMEOUT``.
-
-
-``COMPRESS_MTIME_DELAY``
-------------------------
-
-:Default: ``None``
-
-The amount of time (in seconds) to cache the result of the check of the
-modification timestamp of a file. Disabled by default. Should be smaller
-than ``COMPRESS_REBUILD_TIMEOUT`` and ``COMPRESS_MINT_DELAY``.
-
-
-Dependencies
-************
-
-* BeautifulSoup_ (for the default ``compressor.parser.BeautifulSoupParser``)
-
-::
-
-    pip install BeautifulSoup
-
-* lxml_ (for the optional ``compressor.parser.LxmlParser``, requires libxml2_)
-
-::
-
-    STATIC_DEPS=true pip install lxml
+Django Compressor combines and compresses linked and inline Javascript
+or CSS in a Django templates into cacheable static files by using the
+``compress`` template tag.
+
+HTML in between ``{% compress js/css %}`` and ``{% endcompress %}`` is
+parsed and searched for CSS or JS. These styles and scripts are subsequently
+processed with optional, configurable compilers and filters.
+
+The default filter for CSS rewrites paths to static files to be absolute
+and adds a cache busting timestamp. For Javascript the default filter
+compresses it using ``jsmin``.
+
+As the final result the template tag outputs a ``<script>`` or ``<link>``
+tag pointing to the optimized file. These files are stored inside a folder
+and given an unique name based on their content. Alternatively it can also
+return the resulting content to the original template directly.
+
+Since the file name is dependend on the content these files can be given
+a far future expiration date without worrying about stale browser caches.
+
+The concatenation and compressing process can also be jump started outside
+of the request/response cycle by using the Django management command
+``manage.py compress``.
+
+Configurability & Extendibility
+-------------------------------
+
+Django Compressor is highly configurable and extendible. The HTML parsing
+is done using BeautifulSoup_ by default. As an alternative Django Compressor
+provides an lxml_ and a html5lib_ based parser, as well as an abstract base
+class that makes it easy to write a custom parser.
+
+Django Compressor also comes with built-in support for `CSS Tidy`_,
+`YUI CSS and JS`_ compressor, the Google's `Closure Compiler`_, a Python
+port of Douglas Crockford's JSmin_, a Python port of the YUI CSS Compressor
+cssmin_ and a filter to convert (some) images into `data URIs`_.
+
+If your setup requires a different compressor or other post-processing
+tool it will be fairly easy to implement a custom filter. Simply extend
+from one of the available base classes.
+
+More documentation about the usage and settings of Django Compressor can be
+found on `django_compressor.readthedocs.org`_.
+
+The source code for Django Compressor can be found and contributed to on
+`github.com/jezdez/django_compressor`_. There you can also file tickets.
+
+The `in-development version`_ of Django Compressor can be installed with
+``pip install django_compressor==dev`` or ``easy_install django_compressor==dev``.
 
 .. _BeautifulSoup: http://www.crummy.com/software/BeautifulSoup/
-.. _lxml: http://codespeak.net/lxml/
-.. _libxml2: http://xmlsoft.org/
+.. _lxml: http://lxml.de/
+.. _html5lib: http://code.google.com/p/html5lib/
+.. _CSS Tidy: http://csstidy.sourceforge.net/
+.. _YUI CSS and JS: http://developer.yahoo.com/yui/compressor/
+.. _Closure Compiler: http://code.google.com/closure/compiler/
+.. _JSMin: http://www.crockford.com/javascript/jsmin.html
+.. _cssmin: https://github.com/zacharyvoase/cssmin
+.. _data URIs: http://en.wikipedia.org/wiki/Data_URI_scheme
+.. _django_compressor.readthedocs.org: http://django_compressor.readthedocs.org/
+.. _github.com/jezdez/django_compressor: https://github.com/jezdez/django_compressor
+.. _in-development version: http://github.com/jezdez/django_compressor/tarball/develop#egg=django_compressor-dev
